@@ -269,8 +269,11 @@ export default function App() {
     });
 
     const callGeminiPrivacyFirst = async (item, imageData = null, textContent = null) => {
-        // PRIVACY FIRST: Only filename metadata and images are sent by default.
-        // Optional: User can enable file context (first 100 chars) for better accuracy.
+        // DIAGNOSTIC: Check if API Key is configured
+        if (!GOOGLE_API_KEY) {
+            console.error("Gemini API Key is missing! Please configure VITE_GEMINI_API_KEY in Vercel environment variables.");
+            return { category: "Uncategorized", ocr: "", confidence: "Error: No Key", suggested_filename: null };
+        }
 
         let promptText = `Analyze this academic file: "${item.fileName}". 
                The suggested subject from local processing is "${item.subject}".
@@ -282,7 +285,6 @@ export default function App() {
                - Keep the original file extension
                - If content is unclear, use the original filename`;
 
-        // Optional: Send first 100 chars if user enables "File Context" toggle
         if (textContent && includeFileContext) {
             promptText += `\n\nFile Context (first 100 chars):\n"${textContent.slice(0, 100)}..."`;
         }
@@ -297,7 +299,6 @@ export default function App() {
         const parts = [{ text: promptText }];
 
         if (imageData) {
-            // Only send image data when user explicitly enables image analysis
             parts.push({ inlineData: { mimeType: "image/png", data: imageData } });
         }
 
@@ -307,9 +308,22 @@ export default function App() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ contents: [{ parts }] })
             });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                console.error("Gemini API Error:", response.status, errorData);
+                throw new Error(`Gemini API failed with status ${response.status}`);
+            }
+
             const data = await response.json();
-            return JSON.parse(data.candidates[0].content.parts[0].text);
+            let text = data.candidates[0].content.parts[0].text;
+
+            // CLEANUP: Remove markdown code block wrappers if present
+            text = text.replace(/```json/g, "").replace(/```/g, "").trim();
+
+            return JSON.parse(text);
         } catch (e) {
+            console.error("PRO Scan Error for " + item.fileName + ":", e);
             return { category: "Uncategorized", ocr: "", confidence: "Low", suggested_filename: null };
         }
     };
@@ -882,17 +896,23 @@ export default function App() {
                                             }
 
                                             setIsUploading(true);
-                                            const blob = await generateOrganizedBlob();
-                                            if (blob) {
-                                                const filename = `SemesterScan_${new Date().toISOString().split('T')[0]}.zip`;
-                                                const result = await uploadToDrive(blob, filename, driveToken);
-                                                if (result.success) {
-                                                    alert(`✅ Saved to Google Drive!\n\nView: ${result.webViewLink}`);
-                                                } else {
-                                                    alert('❌ Upload failed: ' + result.error);
+                                            try {
+                                                const blob = await generateOrganizedBlob();
+                                                if (blob) {
+                                                    const filename = `SemesterScan_${new Date().toISOString().split('T')[0]}.zip`;
+                                                    const result = await uploadToDrive(blob, filename, driveToken);
+                                                    if (result.success) {
+                                                        alert(`✅ Saved to Google Drive!\n\nView: ${result.webViewLink}`);
+                                                    } else {
+                                                        throw new Error(result.error);
+                                                    }
                                                 }
+                                            } catch (e) {
+                                                console.error("Drive Upload Failed:", e);
+                                                alert(`❌ Upload failed: ${e.message}\n\nTIP: Did you add '${window.location.origin}' to "Authorized JavaScript origins" in Google Cloud Console?`);
+                                            } finally {
+                                                setIsUploading(false);
                                             }
-                                            setIsUploading(false);
                                         }}
                                         disabled={isUploading}
                                         className="px-6 py-2.5 bg-white border border-[#d1c7b3]/50 text-[#122538] hover:bg-[#f8f5f0] rounded-[10px] text-sm font-bold shadow-sm flex items-center gap-2 disabled:opacity-50"
@@ -933,24 +953,7 @@ export default function App() {
                                         <div className="text-xs text-gray-500">AI summary of top files (Preview first)</div>
                                     </div>
                                 </button>
-
-                                <button
-                                    onClick={() => {
-                                        const events = getExamEvents(chatContent);
-                                        if (events.length > 0) {
-                                            setCalendarModal({ open: true, events });
-                                        } else {
-                                            alert("No exam dates found in chat. Try scanning a chat with date mentions.");
-                                        }
-                                    }}
-                                    className="bg-white p-4 rounded-xl border border-[#d1c7b3]/30 flex items-center gap-4 hover:shadow-md transition-all group"
-                                >
-                                    <div className="p-3 bg-amber-50 rounded-lg text-amber-600 group-hover:scale-110 transition-transform"><CalendarIcon className="w-5 h-5" /></div>
-                                    <div className="text-left">
-                                        <div className="font-bold text-[#122538]">Sync Exam Calendar</div>
-                                        <div className="text-xs text-gray-500">Add to Google Calendar (Preview first)</div>
-                                    </div>
-                                </button>
+                                {/* Calendar Sync Removed: Feature requires chat logs which are disabled for privacy. */}
                             </div>
 
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">

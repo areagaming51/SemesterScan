@@ -314,24 +314,6 @@ This project was built for the **TechSprint '25** hackathon hosted by GDG On Cam
 
 ---
 
-## 🗺️ **Roadmap**
-
-- [x] ZIP file processing
-- [x] AI categorization
-- [x] Google Drive integration
-- [x] History tracking
-
-### **Phase 2: Enhancements** 🚧
-- [ ] Batch processing (multiple ZIPs)
-- [ ] Custom category rules
-- [ ] Collaborative organization
-- [ ] Mobile app (React Native)
-
-### **Phase 3: Advanced** 📋
-- [ ] Multi-language support
-- [ ] Advanced OCR (handwriting)
-- [ ] Study analytics dashboard
-- [ ] Integration with LMS platforms
 
 ---
 
@@ -361,11 +343,6 @@ This project is licensed under the MIT License - see [LICENSE](LICENSE) file for
 
 ---
 
-## 👥 **Team**
-
-- **Your Name** - *Lead Developer* - [@yourhandle](https://github.com/yourhandle)
-
----
 
 ## 🙏 **Acknowledgments**
 
@@ -379,14 +356,7 @@ This project is licensed under the MIT License - see [LICENSE](LICENSE) file for
 
 ---
 
-## 📞 **Contact & Support**
 
-- 📧 Email: your.email@example.com
-- 🐦 Twitter: [@yourhandle](https://twitter.com/yourhandle)
-- 💬 Discord: [Join our server](https://discord.gg/yourserver)
-- 🐛 Issues: [GitHub Issues](https://github.com/yourusername/semesterscan/issues)
-
----
 
 ## ⭐ **Star History**
 
