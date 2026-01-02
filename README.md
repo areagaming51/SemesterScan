@@ -6,7 +6,7 @@
 
 SemesterScan is an intelligent document organization tool that uses AI to automatically categorize, analyze, and organize academic files from WhatsApp chat exports. Built with privacy-first architecture and powered by **Google's Gemini AI**, **Firebase**, and **Google Cloud** technologies.
 
-[![Live Demo](https://img.shields.io/badge/demo-live-success)](https://your-demo-url.com)
+[![Live Demo](https://img.shields.io/badge/demo-live-success)](https://semester-scan.vercel.app/)
 [![Hackathon](https://img.shields.io/badge/Hackathon-GDGOC--25%20TechSprint-4285F4?logo=google)](https://vision.hack2skill.com/event/gdgoc-25-ssasit-techsprint2k25)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![React](https://img.shields.io/badge/React-18.x-61DAFB?logo=react)](https://reactjs.org/)
@@ -301,39 +301,22 @@ This project was built for the **TechSprint '25** hackathon hosted by GDG On Cam
 ## 📸 **Screenshots**
 
 ### Dashboard
-![Dashboard](docs/screenshots/dashboard.png)
+<img width="1919" height="1079" alt="Screenshot 2026-01-02 212754" src="https://github.com/user-attachments/assets/029ebb60-f905-4dfc-a0f8-7b5fcbc8c053" />
+
 *Overview of processed files with subject breakdown*
 
 ### File Analysis
-![Files View](docs/screenshots/files.png)
+<img width="1919" height="1079" alt="Screenshot 2026-01-02 212806" src="https://github.com/user-attachments/assets/3149f23c-08db-4a79-8aec-8ba539823ad4" />
+<img width="1919" height="1079" alt="Screenshot 2026-01-02 212813" src="https://github.com/user-attachments/assets/905ef5ae-b3c9-4cd4-9a17-fffb63eff186" />
+
 *Detailed file categorization with confidence scores*
 
-### Calendar Sync
-![Calendar](docs/screenshots/calendar.png)
-*Auto-detected exam dates ready for Google Calendar*
+### guide to start
+<img width="457" height="799" alt="Screenshot 2026-01-02 212851" src="https://github.com/user-attachments/assets/b37c987c-234f-4192-84a5-6be92b16d907" /> <img width="450" height="804" alt="Screenshot 2026-01-02 212905" src="https://github.com/user-attachments/assets/5a312ffe-48af-4d43-a821-ebd58166c39a" /> <img width="451" height="807" alt="Screenshot 2026-01-02 212911" src="https://github.com/user-attachments/assets/95d46494-ee72-487f-94b7-368c249e6699" />
+
 
 ---
 
-## 🗺️ **Roadmap**
-
-- [x] ZIP file processing
-- [x] AI categorization
-- [x] Google Drive integration
-- [x] History tracking
-
-### **Phase 2: Enhancements** 🚧
-- [ ] Batch processing (multiple ZIPs)
-- [ ] Custom category rules
-- [ ] Collaborative organization
-- [ ] Mobile app (React Native)
-
-### **Phase 3: Advanced** 📋
-- [ ] Multi-language support
-- [ ] Advanced OCR (handwriting)
-- [ ] Study analytics dashboard
-- [ ] Integration with LMS platforms
-
----
 
 ## 🤝 **Contributing**
 
@@ -363,7 +346,7 @@ This project is licensed under the MIT License - see [LICENSE](LICENSE) file for
 
 ## 👥 **Team**
 
-- **Your Name** - *Lead Developer* - [@yourhandle](https://github.com/yourhandle)
+- **Roshan Kanojiya** - *Lead Developer* - [@roshan.sama30](https://github.com/roshan30-git)
 
 ---
 
@@ -377,16 +360,7 @@ This project is licensed under the MIT License - see [LICENSE](LICENSE) file for
 - React community for amazing tools
 - WhatsApp for enabling chat exports
 
----
 
-## 📞 **Contact & Support**
-
-- 📧 Email: your.email@example.com
-- 🐦 Twitter: [@yourhandle](https://twitter.com/yourhandle)
-- 💬 Discord: [Join our server](https://discord.gg/yourserver)
-- 🐛 Issues: [GitHub Issues](https://github.com/yourusername/semesterscan/issues)
-
----
 
 ## ⭐ **Star History**
 
