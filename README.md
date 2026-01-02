@@ -301,16 +301,21 @@ This project was built for the **TechSprint '25** hackathon hosted by GDG On Cam
 ## 📸 **Screenshots**
 
 ### Dashboard
-![Dashboard](docs/screenshots/dashboard.png)
+<img width="1919" height="1079" alt="Screenshot 2026-01-02 212754" src="https://github.com/user-attachments/assets/67e0b945-e18a-4752-9705-1db70e8f6603" />
+
 *Overview of processed files with subject breakdown*
 
 ### File Analysis
-![Files View](docs/screenshots/files.png)
+<img width="1919" height="1079" alt="Screenshot 2026-01-02 212806" src="https://github.com/user-attachments/assets/85684f2b-d029-426f-9342-80168a6f0f0b" />
+<img width="1919" height="1079" alt="Screenshot 2026-01-02 212813" src="https://github.com/user-attachments/assets/26a9e6ee-8e8c-4a11-b220-972a658dbee1" />
+
 *Detailed file categorization with confidence scores*
 
-### Calendar Sync
-![Calendar](docs/screenshots/calendar.png)
-*Auto-detected exam dates ready for Google Calendar*
+### guides
+<img width="457" height="799" alt="Screenshot 2026-01-02 212851" src="https://github.com/user-attachments/assets/e3082f76-325c-4c92-ab2e-95374f0f4f16" />
+<img width="450" height="804" alt="Screenshot 2026-01-02 212905" src="https://github.com/user-attachments/assets/24cf7d27-6dc7-49d7-903b-def4a2317be0" />
+<img width="451" height="807" alt="Screenshot 2026-01-02 212911" src="https://github.com/user-attachments/assets/f02c8d6e-70a6-4658-a641-ce4ab000cb51" />
+
 
 ---
 
