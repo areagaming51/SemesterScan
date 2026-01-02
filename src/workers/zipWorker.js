@@ -10,21 +10,6 @@ self.onmessage = async (e) => {
             const zipReader = new ZipReader(new BlobReader(file));
             const entries = await zipReader.getEntries();
 
-            // Extract chat file immediately (Metadata-First)
-            // WhatsApp exports are typically "WhatsApp Chat with [Name].txt" 
-            // We'll look for any .txt file that's not in __MACOSX folder
-            const chatEntry = entries.find(entry =>
-                entry.filename.toLowerCase().endsWith('.txt') &&
-                !entry.filename.includes('__MACOSX') &&
-                !entry.directory
-            );
-
-            let chatContent = null;
-            if (chatEntry) {
-                const textWriter = new TextWriter();
-                chatContent = await chatEntry.getData(textWriter);
-            }
-
             // Return lightweight entry list (just names and indices) to main thread
             const entryList = entries.map((entry, index) => ({
                 id: index,
@@ -35,8 +20,7 @@ self.onmessage = async (e) => {
 
             self.postMessage({
                 type: 'ZIP_LOADED',
-                entries: entryList,
-                chatContent
+                entries: entryList
             });
 
             // Keep reader alive? No, we can't easily pass the reader instance back. 

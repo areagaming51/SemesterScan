@@ -12,7 +12,7 @@ import {
     Calendar as CalendarIcon, FileCode, Sliders, Zap, Award, WifiOff, Wand2
 } from 'lucide-react';
 import { extractFileContent } from './utils/fileExtractor';
-import { generateExamCalendar, generateStudyBrief, getExamEvents, syncEventsToGoogleCalendar } from './utils/postProcessing';
+import { generateStudyBrief } from './utils/postProcessing';
 import { uploadToDrive } from './utils/driveService';
 import AnalysisModeSelector from './components/AnalysisModeSelector';
 import ImageAnalysisToggle from './components/ImageAnalysisToggle';
@@ -77,7 +77,6 @@ const FileIcon = ({ filename }) => {
 export default function App() {
 
     const [view, setView] = useState('overview');
-    const [chatContent, setChatContent] = useState('');
     const [zipInstance, setZipInstance] = useState(null);
     const [isProcessingZip, setIsProcessingZip] = useState(false);
     const [isScanning, setIsScanning] = useState(false);
@@ -96,7 +95,6 @@ export default function App() {
     const [includeFileContext, setIncludeFileContext] = useState(false); // Toggle for sending file context (100 chars)
     const [proQuota, setProQuota] = useState({ count: 0, lastRun: null }); // Persistence for hackathon limits
     const [studyBriefModal, setStudyBriefModal] = useState({ open: false, content: '', loading: false }); // Study Brief preview
-    const [calendarModal, setCalendarModal] = useState({ open: false, events: [] }); // Calendar events preview
     const [isUploading, setIsUploading] = useState(false); // Cloud upload state
     const [scanHistory, setScanHistory] = useState([]); // Level 3: Firebase History
 
@@ -170,11 +168,10 @@ export default function App() {
         // Initialize Web Worker
         workerRef.current = new ZipWorker();
         workerRef.current.onmessage = (e) => {
-            const { type, entries, chatContent, error } = e.data;
+            const { type, entries, error } = e.data;
             if (type === 'ZIP_LOADED') {
-                // Metadata-First: We have the file list and chat text, but NOT the heavy file contents
+                // Metadata-First: We have the file list, but NOT the heavy file contents
                 setZipInstance(entries); // storing lightweight entries list instead of heavy JSZip obj
-                setChatContent(chatContent || "No chat extracted found.");
                 setIsProcessingZip(false);
             } else if (type === 'ERROR') {
                 console.error("Worker Error:", error);
@@ -216,7 +213,6 @@ export default function App() {
         const provider = new GoogleAuthProvider();
         provider.addScope('https://www.googleapis.com/auth/drive.readonly');
         provider.addScope('https://www.googleapis.com/auth/drive.file');
-        provider.addScope('https://www.googleapis.com/auth/calendar.events'); // Calendar sync scope
 
         try {
             const result = await signInWithPopup(auth, provider);
@@ -255,10 +251,6 @@ export default function App() {
                         if (fileName.endsWith('.zip')) {
                             const zip = await new window.JSZip().loadAsync(blob);
                             setZipInstance(zip);
-                            const chat = Object.keys(zip.files).find(n => n.toLowerCase().endsWith('.txt') && !n.includes('__MACOSX'));
-                            if (chat) setChatContent(await zip.file(chat).async("string"));
-                        } else if (fileName.endsWith('.txt')) {
-                            setChatContent(await blob.text());
                         }
                         setResults([]);
                     } catch (e) { console.error(e); } finally { setIsProcessingZip(false); }
@@ -403,57 +395,33 @@ export default function App() {
         setIsScanning(true);
         setScanStep(1);
 
-        // Initial parsing
-        const lines = chatContent.split('\n');
-        const attachmentRegex = /[\w\-\.\(\)\s]+\.(?:pdf|jpg|png|docx|pptx|doc|mp4|opus)/i;
         const rawItems = [];
 
-        // STEP 2 & 3: Local Heuristics
-        setScanStep(2);
+        // Build list of relevant files from ZIP entries
+        zipInstance.forEach((entry, index) => {
+            const fileName = entry.filename;
+            if (entry.directory || fileName.includes('__MACOSX')) return;
 
-        // Build list of relevant files from ZIP entries or Chat? 
-        // We should cross-reference.
-        const zipFilenames = new Set(zipInstance.map(z => z.filename));
+            // Skip chat/text files for privacy as requested
+            if (fileName.toLowerCase().endsWith('.txt')) return;
 
-        lines.forEach((line, index) => {
-            const match = line.match(attachmentRegex);
-            if (match && (line.includes('attached') || line.includes('<attached:'))) {
-                const fileName = match[0].trim();
+            // PRIVACY: Skip images when includeImages is OFF
+            const isImage = /\.(jpg|jpeg|png|gif|webp|bmp)$/i.test(fileName);
+            if (isImage && !includeImages) {
+                return;
+            }
 
-                // PRIVACY: Skip images when includeImages is OFF
-                const isImage = /\.(jpg|jpeg|png|gif|webp|bmp)$/i.test(fileName);
-                if (isImage && !includeImages) {
-                    return; // Skip this image file for privacy
-                }
+            // Heuristic: Check filename for subject
+            let subject = "General";
+            const filenameLower = fileName.toLowerCase();
 
-                if (zipFilenames.has(fileName)) {
-                    // Context extraction
-                    const context = lines.slice(Math.max(0, index - 5), Math.min(lines.length, index + 3)).join(' ');
-
-                    // IMPROVED: Check filename FIRST, then fall back to context
-                    let subject = "General";
-                    const filenameLower = fileName.toLowerCase();
-
-                    // First, try to match subject from filename
-                    for (const [sub, keys] of Object.entries(SUBJECT_KEYWORDS)) {
-                        if (keys.some(k => filenameLower.includes(k))) {
-                            subject = sub;
-                            break;
-                        }
-                    }
-
-                    // If still General, try context
-                    if (subject === "General") {
-                        for (const [sub, keys] of Object.entries(SUBJECT_KEYWORDS)) {
-                            if (keys.some(k => context.toLowerCase().includes(k))) {
-                                subject = sub;
-                                break;
-                            }
-                        }
-                    }
-                    rawItems.push({ id: index, fileName, subject, lineSnippet: line });
+            for (const [sub, keys] of Object.entries(SUBJECT_KEYWORDS)) {
+                if (keys.some(k => filenameLower.includes(k))) {
+                    subject = sub;
+                    break;
                 }
             }
+            rawItems.push({ id: index, fileName, subject });
         });
 
         // Also add "Loose" files that might be in ZIP but not in chat (PRO feature?)
@@ -784,7 +752,7 @@ export default function App() {
                             </div>
 
                             <h1 className="font-serif text-5xl font-bold text-[#122538] mb-6 tracking-tight">Organize your semester</h1>
-                            <p className="text-gray-500 text-lg mb-8 max-w-[600px]">Upload your WhatsApp chat export to structure your notes by subject. Processing is local and private.</p>
+                            <p className="text-gray-500 text-lg mb-8 max-w-[600px]">Upload your semester ZIP archive to structure your notes by subject. Processing is local and private.</p>
 
                             {/* Seasonal Callout */}
                             <div className="mb-8 bg-amber-50 border border-amber-200 px-4 py-2 rounded-full flex items-center gap-2 animate-pulse">
@@ -805,7 +773,7 @@ export default function App() {
                                         </button>
                                     </div>
                                 </div>
-                                {chatContent && (
+                                {zipInstance && (
                                     <div className="flex flex-col items-center gap-4 w-full max-w-md">
                                         {/* Analysis Mode Selector Component */}
                                         <AnalysisModeSelector
@@ -1197,8 +1165,8 @@ export default function App() {
                                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                                         {[
                                             { step: '01', title: 'Upload ZIP', desc: 'Export your WhatsApp chat to ZIP (without media restrictions) and upload it here.' },
-                                            { step: '02', title: 'Smart Scan', desc: 'Our local AI filters out chat noise and identifies academic documents.' },
-                                            { step: '03', title: 'Organize', desc: 'Files are auto-categorized by subject. Sync to Drive or Calendar instantly.' }
+                                            { step: '02', title: 'Smart Scan', desc: 'Our local AI identifies academic documents and filters out junk files.' },
+                                            { step: '03', title: 'Organize', desc: 'Files are auto-categorized by subject. Sync to Drive instantly.' }
                                         ].map((item, i) => (
                                             <div key={i} className="bg-white p-6 rounded-2xl border border-[#d1c7b3]/30">
                                                 <div className="text-4xl font-black text-[#d1c7b3]/40 mb-2">{item.step}</div>
@@ -1238,7 +1206,6 @@ export default function App() {
                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                         {[
                                             { icon: HardDrive, label: 'Google Drive Sync', desc: 'Save organized files directly to your Drive.' },
-                                            { icon: CalendarIcon, label: 'Exam Calendar', desc: 'Extract dates and add to Google Calendar.' },
                                             { icon: BrainCircuit, label: 'AI Study Brief', desc: 'Get a generated summary of your syllabus.' },
                                             { icon: FileImage, label: 'Image Analysis', desc: 'OCR for handwritten notes and whiteboard pics.' }
                                         ].map((feat, i) => (
@@ -1291,7 +1258,7 @@ export default function App() {
                                 <div className="p-6 bg-emerald-50 rounded-2xl border border-emerald-100 flex gap-4">
                                     <Shield className="w-5 h-5 text-emerald-600 shrink-0 mt-1" />
                                     <p className="text-[11px] text-emerald-800 leading-relaxed">
-                                        <strong>Privacy Note:</strong> Conversational context was analyzed locally within your browser. Gemini only processed the filename and image content.
+                                        <strong>Privacy Note:</strong> All analysis is performed locally in your browser. Gemini only processes file metadata and image content (if enabled).
                                     </p>
                                 </div>
                             </div>
@@ -1299,8 +1266,6 @@ export default function App() {
                     )
                 }
             </main >
-
-
 
             {/* STUDY BRIEF MODAL */}
             {studyBriefModal.open && (
@@ -1354,78 +1319,6 @@ export default function App() {
                 </div>
             )}
 
-            {/* CALENDAR EVENTS MODAL */}
-            {calendarModal.open && (
-                <div className="fixed inset-0 bg-[#122538]/80 backdrop-blur-md flex items-center justify-center z-50 p-6">
-                    <div className="bg-[#f8f5f0] w-full max-w-2xl max-h-[80vh] rounded-[32px] shadow-2xl overflow-hidden border border-white/50 animate-in fade-in flex flex-col">
-                        <div className="p-8 border-b border-[#d1c7b3]/30 flex items-center justify-between shrink-0">
-                            <div>
-                                <h3 className="font-serif text-2xl font-bold text-[#122538]">Exam Calendar</h3>
-                                <p className="text-sm text-gray-500">{calendarModal.events.length} events found - click to add to Google Calendar</p>
-                            </div>
-                            <button onClick={() => setCalendarModal({ open: false, events: [] })}>
-                                <X className="w-6 h-6 text-gray-400 hover:text-gray-600" />
-                            </button>
-                        </div>
-                        <div className="flex-1 overflow-y-auto p-6 space-y-3">
-                            {calendarModal.events.map((event, index) => (
-                                <a
-                                    key={index}
-                                    href={event.googleCalendarUrl}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="block bg-white border border-[#d1c7b3]/30 rounded-xl p-4 hover:shadow-md hover:border-amber-300 transition-all group"
-                                >
-                                    <div className="flex items-start gap-4">
-                                        <div className="p-2 bg-amber-50 rounded-lg text-amber-600 shrink-0">
-                                            <CalendarIcon className="w-5 h-5" />
-                                        </div>
-                                        <div className="flex-1 min-w-0">
-                                            <p className="text-sm font-medium text-[#122538] truncate">{event.title}</p>
-                                            <p className="text-xs text-gray-500 mt-1">{event.dateStr}</p>
-                                        </div>
-                                        <div className="text-xs text-amber-600 font-bold uppercase tracking-wide opacity-0 group-hover:opacity-100 transition-opacity">
-                                            Add to Calendar →
-                                        </div>
-                                    </div>
-                                </a>
-                            ))}
-                        </div>
-                        <div className="p-6 bg-white/80 border-t border-[#d1c7b3]/30 flex justify-between items-center shrink-0">
-                            <span className="text-xs text-gray-500">Click any event to open Google Calendar</span>
-                            <button
-                                onClick={() => {
-                                    const blob = generateExamCalendar(chatContent);
-                                    if (blob) {
-                                        const url = URL.createObjectURL(blob);
-                                        const a = document.createElement('a'); a.href = url; a.download = 'Exam_Schedule.ics'; a.click();
-                                    }
-                                }}
-                                className="px-6 py-3 bg-[#1a3b5d] text-white rounded-xl text-sm font-bold hover:bg-[#0d1b2a] transition-colors flex items-center gap-2"
-                            >
-                                <Download className="w-4 h-4" /> Download All (.ics)
-                            </button>
-                            {user && driveToken && (
-                                <button
-                                    onClick={async () => {
-                                        if (confirm(`Sync ${calendarModal.events.length} events to your Primary Google Calendar?`)) {
-                                            const res = await syncEventsToGoogleCalendar(calendarModal.events, driveToken);
-                                            if (res.success) {
-                                                alert(`✅ Successfully synced ${res.added} events to your Google Calendar!`);
-                                            } else {
-                                                alert('❌ Sync failed: ' + res.errors.join(', '));
-                                            }
-                                        }
-                                    }}
-                                    className="ml-3 px-6 py-3 bg-[#0f5132] text-white rounded-xl text-sm font-bold hover:bg-[#0a3622] transition-colors flex items-center gap-2"
-                                >
-                                    <Zap className="w-4 h-4" /> Sync All to Calendar
-                                </button>
-                            )}
-                        </div>
-                    </div>
-                </div>
-            )}
 
             {/* FLOATING HELP */}
             <button onClick={() => setView('guide')} className="fixed bottom-10 right-10 w-14 h-14 bg-[#1a3b5d] hover:bg-[#0d1b2a] rounded-full shadow-2xl flex items-center justify-center text-white transition-all hover:scale-110 z-30 shadow-indigo-600/20"><Info className="w-6 h-6" /></button>

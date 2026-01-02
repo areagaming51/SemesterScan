@@ -15,14 +15,11 @@ SemesterScan is an intelligent document organization tool that uses AI to automa
 
 ---
 
-## 🎯 Problem Statement
-
-Students receive hundreds of academic files through WhatsApp study groups, but:
-- Files are scattered across multiple chats
+- Files are scattered across multiple platforms
 - No automatic categorization by subject or type
 - Privacy concerns when using cloud services
 - Time-consuming manual organization
-- Difficult to track exam dates and deadlines
+- Difficult to find that one specific note from weeks ago
 
 **SemesterScan solves this with a 3-Tier Privacy-First AI Architecture.**
 
@@ -47,8 +44,7 @@ Students receive hundreds of academic files through WhatsApp study groups, but:
 
 #### **Tier 3: Cloud Sync (Firebase)**
 - ☁️ **History Tracking**: Save scan sessions across devices
-- 📅 **Google Calendar Integration**: Auto-sync exam dates
-- 💾 **Google Drive Export**: Organized folder structure
+-  **Google Drive Export**: Organized folder structure
 - 🔐 **Secure Authentication**: Firebase Auth with OAuth 2.0
 
 ---
@@ -92,7 +88,8 @@ College_Docs/
 
 ### 🔐 **Privacy-First Design**
 
-- ✅ **No Chat Logs Sent**: WhatsApp conversations stay on your device
+- ✅ **Zero Chat Access**: The app only processes the files themselves
+- ✅ **Privacy Engine**: Pattern-match classification stays local
 - ✅ **No Text Content Sent**: PDF/DOCX content never leaves your browser
 - ✅ **Metadata Only**: AI only sees filename and local subject guess
 - ✅ **Image Toggle**: Disable image processing entirely
@@ -103,11 +100,10 @@ College_Docs/
 
 ### 🚀 **Post-Processing Features**
 
-#### 📅 **Exam Calendar Sync**
-- Auto-detects exam dates from chat messages
-- One-click sync to Google Calendar
-- Download `.ics` file for offline calendars
-- Smart date parsing (supports multiple formats)
+#### ☁️ **Google Drive Integration**
+- Save organized ZIP to dedicated "SemesterScan" folder
+- Import previous exports directly from Drive
+- Maintains folder structure and metadata
 
 #### 📚 **AI Study Brief**
 - Summarizes your semester at a glance
@@ -197,11 +193,10 @@ Firebase config is in `src/App.jsx` (update with your project credentials).
 
 ## 📖 **Usage**
 
-### **Step 1: Export WhatsApp Chat**
-1. Open your study group in WhatsApp
-2. Tap **⋮** → **More** → **Export Chat**
-3. Choose **"Include Media"** (or "Without Media" for privacy)
-4. Save the ZIP file
+### **Step 1: Get your ZIP**
+1. Collect your academic files into a ZIP archive.
+2. (Optional) Use your WhatsApp "Export Chat" ZIP (include media).
+3. Save the ZIP file
 
 ### **Step 2: Upload & Scan**
 1. Upload the ZIP to SemesterScan
@@ -212,8 +207,7 @@ Firebase config is in `src/App.jsx` (update with your project credentials).
 ### **Step 3: Organize & Export**
 1. Review categorized files in the dashboard
 2. Download organized ZIP or save to Google Drive
-3. Sync exam dates to Google Calendar
-4. Generate AI Study Brief
+3. Generate AI Study Brief
 
 ---
 
@@ -322,11 +316,9 @@ This project was built for the **TechSprint '25** hackathon hosted by GDG On Cam
 
 ## 🗺️ **Roadmap**
 
-### **Phase 1: Core Features** ✅
 - [x] ZIP file processing
 - [x] AI categorization
 - [x] Google Drive integration
-- [x] Calendar sync
 - [x] History tracking
 
 ### **Phase 2: Enhancements** 🚧
