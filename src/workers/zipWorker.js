@@ -1,16 +1,13 @@
 
-import { BlobReader, ZipReader, TextWriter, BlobWriter } from '@zip.js/zip.js';
+import { BlobReader, ZipReader, TextWriter, BlobWriter, ZipWriter } from '@zip.js/zip.js';
 
 self.onmessage = async (e) => {
-    const { type, file, entryName } = e.data;
+    const { type, file, entryName, fileMap } = e.data;
 
     try {
         if (type === 'INIT_ZIP') {
-            // Initialize reader and return entries + chat text
             const zipReader = new ZipReader(new BlobReader(file));
             const entries = await zipReader.getEntries();
-
-            // Return lightweight entry list (just names and indices) to main thread
             const entryList = entries.map((entry, index) => ({
                 id: index,
                 filename: entry.filename,
@@ -18,39 +15,51 @@ self.onmessage = async (e) => {
                 uncompressedSize: entry.uncompressedSize
             }));
 
-            self.postMessage({
-                type: 'ZIP_LOADED',
-                entries: entryList
-            });
-
-            // Keep reader alive? No, we can't easily pass the reader instance back. 
-            // For now, we might re-instantiate or just hold it in global scope if we want to be fancy.
-            // A simple approach for this app: The Main thread manages the Blob, 
-            // passing it to the worker is cheap (cloned).
-            // BUT re-reading the directory for 5GB file might be slow? 
-            // Actually, reading central directory is fast.
-            // Let's store the reader in self for subsequent requests.
+            self.postMessage({ type: 'ZIP_LOADED', entries: entryList });
             self.currentZipReader = zipReader;
-            // Note: For a true robust app we'd handle multiple instances, but singleton is fine here.
         }
 
         if (type === 'EXTRACT_FILE') {
-            if (!self.currentZipReader) {
-                // Re-init if missing (shouldn't happen in this flow)
+            if (!self.currentZipReader && file) {
                 self.currentZipReader = new ZipReader(new BlobReader(file));
-                await self.currentZipReader.getEntries();
             }
-
             const entries = await self.currentZipReader.getEntries();
             const entry = entries.find(e => e.filename === entryName);
-
             if (entry) {
-                const blobWriter = new BlobWriter();
-                const blob = await entry.getData(blobWriter);
+                const blob = await entry.getData(new BlobWriter());
+                // Handle port transfer if available? Main thread currently uses event listener.
                 self.postMessage({ type: 'FILE_EXTRACTED', entryName, blob });
             } else {
                 self.postMessage({ type: 'ERROR', error: 'File not found' });
             }
+        }
+
+        if (type === 'GENERATE_ZIP') {
+            // fileMap is array of { original, newPath }
+            if (!self.currentZipReader && file) {
+                self.currentZipReader = new ZipReader(new BlobReader(file));
+            }
+            const entries = await self.currentZipReader.getEntries();
+            const blobWriter = new BlobWriter("application/zip");
+            const zipWriter = new ZipWriter(blobWriter);
+
+            for (const mapItem of fileMap) {
+                const entry = entries.find(e => e.filename === mapItem.original);
+                if (entry) {
+                    // Pipe directly? entry.getData(writer)
+                    // But ZipWriter.add takes a Reader.
+                    // We have to separate the two.
+                    // entry.getData returns data written to writer.
+                    // We can read into a Blob then write. For memory efficiency, ideally streams, 
+                    // but zip.js simplified API often uses Blobs. 
+                    // Let's use Blob for simplicity and robustness first.
+                    const blob = await entry.getData(new BlobWriter());
+                    await zipWriter.add(mapItem.newPath, new BlobReader(blob));
+                }
+            }
+
+            const organizedBlob = await zipWriter.close();
+            self.postMessage({ type: 'ZIP_GENERATED', blob: organizedBlob });
         }
 
     } catch (error) {

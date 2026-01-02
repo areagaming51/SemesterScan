@@ -20,6 +20,8 @@ import FileContextToggle from './components/FileContextToggle';
 // Worker import compatible with Vite
 import ZipWorker from './workers/zipWorker?worker';
 import ReactMarkdown from 'react-markdown';
+import TimelineView from './components/TimelineView';
+import QuizModal from './components/QuizModal';
 
 // --- Configuration Constants ---
 const GOOGLE_API_KEY = import.meta.env.VITE_GEMINI_API_KEY || ""; // Loaded from .env
@@ -97,6 +99,12 @@ export default function App() {
     const [studyBriefModal, setStudyBriefModal] = useState({ open: false, content: '', loading: false }); // Study Brief preview
     const [isUploading, setIsUploading] = useState(false); // Cloud upload state
     const [scanHistory, setScanHistory] = useState([]); // Level 3: Firebase History
+    const [originalFile, setOriginalFile] = useState(null); // Persistence for Worker re-init
+
+    // --- Beta Features State ---
+    const [isBetaEnabled, setIsBetaEnabled] = useState(true); // Feature Flag
+    const [timelineEvents, setTimelineEvents] = useState([]); // Extracted chat events
+    const [quizModal, setQuizModal] = useState({ open: false, data: null, loading: false }); // Quiz State
 
     const fileInputRef = useRef(null);
     const workerRef = useRef(null); // Reference to the ZipWorker
@@ -168,15 +176,25 @@ export default function App() {
         // Initialize Web Worker
         workerRef.current = new ZipWorker();
         workerRef.current.onmessage = (e) => {
-            const { type, entries, error } = e.data;
+            const { type, entries, blob, error } = e.data;
             if (type === 'ZIP_LOADED') {
                 // Metadata-First: We have the file list, but NOT the heavy file contents
                 setZipInstance(entries); // storing lightweight entries list instead of heavy JSZip obj
                 setIsProcessingZip(false);
+            } else if (type === 'ZIP_GENERATED') {
+                // This will be handled by the one-off listener in generateOrganizedBlob, 
+                // but we might need a global handler if we used that pattern.
+                // However, generateOrganizedBlob uses a Promise wrapper with addEventListener.
+                // To avoid double handling, we can ignore it here or dispatch a custom event.
+                // Better yet, let's make the Promise wrapper rely on a unique ID or just this event if we move the listener here?
+                // For simplicity, let's keep the global error handler here and letting the specific promise listener handle success.
+                // BUT, if we have multiple listeners, they both fire.
+                window.dispatchEvent(new CustomEvent('ZIP_GENERATED', { detail: blob }));
             } else if (type === 'ERROR') {
                 console.error("Worker Error:", error);
                 alert("Error processing ZIP: " + error);
                 setIsProcessingZip(false);
+                window.dispatchEvent(new CustomEvent('ZIP_ERROR', { detail: error }));
             }
         };
 
@@ -328,6 +346,78 @@ export default function App() {
         }
     };
 
+    // --- Beta Feature Functions ---
+
+    const callGeminiTimeline = async (chatText) => {
+        if (!GOOGLE_API_KEY) return [];
+
+        const prompt = `
+        Analyze this chat log and extract key academic dates, exams, and assignment deadlines.
+        Ignore conversation filler. Focus on explicit dates or "next monday"-style phrases if context allows.
+        Return a JSON array of objects with keys: { date: "YYYY-MM-DD", title: "Short Title", description: "Details", type: "exam" | "assignment" | "event", context: "Quote from chat" }.
+        If no events found, return [].
+        
+        Chat Log:
+        ${chatText.substring(0, 15000)} // Limit context 
+        `;
+
+        try {
+            const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${GOOGLE_API_KEY}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+            });
+
+            const data = await response.json();
+            let text = data.candidates[0].content.parts[0].text;
+            text = text.replace(/```json/g, "").replace(/```/g, "").trim();
+            return JSON.parse(text);
+        } catch (e) {
+            console.error("Timeline Gen Error:", e);
+            return [];
+        }
+    };
+
+    const callGeminiQuiz = async (fileText, fileName) => {
+        if (!GOOGLE_API_KEY) throw new Error("No API Key");
+
+        const prompt = `
+        Create a 5-question multiple-choice quiz based on these notes.
+        Target Audience: University Student.
+        File: ${fileName}
+        
+        Content:
+        ${fileText.substring(0, 10000)}
+
+        Return strictly JSON format:
+        {
+          "questions": [
+            {
+              "question": "Question text?",
+              "options": ["A", "B", "C", "D"],
+              "correctAnswerIndex": 0 // 0-3
+            }
+          ]
+        }
+        `;
+
+        try {
+            const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${GOOGLE_API_KEY}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+            });
+
+            const data = await response.json();
+            let text = data.candidates[0].content.parts[0].text;
+            text = text.replace(/```json/g, "").replace(/```/g, "").trim();
+            return JSON.parse(text);
+        } catch (e) {
+            console.error("Quiz Gen Error:", e);
+            return null;
+        }
+    };
+
     const checkQuota = () => {
         if (scanMode !== 'pro') return true;
 
@@ -416,8 +506,8 @@ export default function App() {
             const fileName = entry.filename;
             if (entry.directory || fileName.includes('__MACOSX')) return;
 
-            // Skip chat/text files for privacy as requested
-            if (fileName.toLowerCase().endsWith('.txt')) return;
+            // Skip chat/text files UNLESS Beta is valid
+            if (fileName.toLowerCase().endsWith('.txt') && !isBetaEnabled) return;
 
             // PRIVACY: Skip images when includeImages is OFF
             const isImage = /\.(jpg|jpeg|png|gif|webp|bmp)$/i.test(fileName);
@@ -504,12 +594,25 @@ export default function App() {
                 if (lowerName.includes('lab') || lowerName.includes('practical')) localCategory = 'Lab';
                 if (lowerName.includes('assign') || lowerName.includes('h.w')) localCategory = 'Assignment';
                 if (lowerName.includes('syllabus') || lowerName.includes('table')) localCategory = 'Admin';
+                // Beta: Classify .txt as Chat
+                if (lowerName.endsWith('.txt')) localCategory = 'Chat Log';
 
                 aiResult = {
                     category: localCategory,
                     ocr: "",
                     confidence: tier1Confident ? "High (Tier 1)" : "Low (Local)"
                 };
+            }
+
+            // Beta: If it is a chat log, try to extract timeline (Silent background process)
+            if (isBetaEnabled && scanMode === 'pro' && item.fileName.endsWith('.txt')) {
+                getFileFromWorker(item.fileName).then(async (blob) => {
+                    const text = await blob.text();
+                    const events = await callGeminiTimeline(text);
+                    if (events && events.length > 0) {
+                        setTimelineEvents(prev => [...prev, ...events]);
+                    }
+                });
             }
 
             // Generate clean filename from AI suggestion
@@ -541,36 +644,46 @@ export default function App() {
     // --- Export Logic ---
 
     const generateOrganizedBlob = async () => {
-        if (!zipInstance || !window.JSZip) return null;
-        const newZip = new window.JSZip();
+        if (!zipInstance) return null;
 
-        const getMapping = (fileName) => {
-            const match = results.find(r => r.fileName === fileName || r.originalFileName === fileName);
+        const fileMap = [];
+        zipInstance.forEach(entry => {
+            const name = entry.filename;
+            if (entry.directory || name.includes('__MACOSX')) return;
+
+            const match = results.find(r => r.originalFileName === name);
+            let newPath = name;
+
             if (match) {
-                return {
-                    path: match.category === 'Junk' ? 'Junk' : `College_Docs/${match.subject}/${match.category}`,
-                    cleanName: match.cleanFileName || match.fileName
-                };
-            }
-            return { path: 'Unsorted', cleanName: fileName };
-        };
-
-        const zipFiles = Object.keys(zipInstance.files);
-        for (const name of zipFiles) {
-            const fileData = zipInstance.files[name];
-            if (fileData.dir || name.includes('__MACOSX')) continue;
-            const content = await fileData.async("blob");
-
-            if (name.toLowerCase().endsWith('.txt')) {
-                // Keep chat logs in root with original name
-                newZip.file(name, content);
+                if (name.toLowerCase().endsWith('.txt')) {
+                    newPath = name;
+                } else {
+                    const folder = match.category === 'Junk' ? 'Junk' : `College_Docs/${match.subject}/${match.category}`;
+                    newPath = `${folder}/${match.cleanFileName || name}`;
+                }
             } else {
-                const { path, cleanName } = getMapping(name);
-                // Use clean AI-suggested filename
-                newZip.file(`${path}/${cleanName}`, content);
+                newPath = `Unsorted/${name}`;
             }
-        }
-        return await newZip.generateAsync({ type: "blob" });
+            fileMap.push({ original: name, newPath });
+        });
+
+        return new Promise((resolve, reject) => {
+            const handler = (e) => {
+                window.removeEventListener('ZIP_GENERATED', handler);
+                window.removeEventListener('ZIP_ERROR', errHandler);
+                resolve(e.detail);
+            };
+            const errHandler = (e) => {
+                window.removeEventListener('ZIP_GENERATED', handler);
+                window.removeEventListener('ZIP_ERROR', errHandler);
+                reject(e.detail);
+            };
+
+            window.addEventListener('ZIP_GENERATED', handler);
+            window.addEventListener('ZIP_ERROR', errHandler);
+
+            workerRef.current.postMessage({ type: 'GENERATE_ZIP', fileMap, file: originalFile });
+        });
     };
 
     const saveToDrive = async () => {
@@ -582,7 +695,7 @@ export default function App() {
             const metadata = { name: `Organized_Semester_${new Date().toISOString().split('T')[0]}.zip`, mimeType: 'application/zip' };
             const res = await uploadToDrive(blob, metadata.name, driveToken);
             if (res.success) {
-                alert(`✅ Successfully saved to Google Drive!\nFolder: SemesterScan\nFile: ${res.name}`);
+                alert(`✅ Successfully saved to Google Drive!\nFolder: SemesterScan\nFile: ${res.name} `);
             } else {
                 throw new Error(res.error);
             }
@@ -619,6 +732,7 @@ export default function App() {
         // We'll trust the Worker to handle it gracefully.
 
         setIsProcessingZip(true);
+        setOriginalFile(file);
         // Offload to Worker
         workerRef.current.postMessage({ type: 'INIT_ZIP', file: file });
     };
@@ -654,9 +768,7 @@ export default function App() {
             <aside className={`fixed lg:static inset-y-0 left-0 w-72 bg-[#122538] text-white flex flex-col h-screen shrink-0 shadow-2xl z-30 transition-transform duration-300 transform ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}>
                 <div className="h-20 flex items-center px-6">
                     <div className="flex items-center gap-3">
-                        <svg className="w-9 h-9 text-[#c8bca0]" fill="currentColor" viewBox="0 0 24 24">
-                            <path d="M19.5 21a3 3 0 0 0 3-3v-4.5a3 3 0 0 0-3-3h-15a3 3 0 0 0-3 3V18a3 3 0 0 0 3 3h15ZM1.5 10.146V6a3 3 0 0 1 3-3h5.379a2.25 2.25 0 0 1 1.59.659l2.122 2.121c.14.141.331.22.53.22H19.5a3 3 0 0 1 3 3v1.146A4.483 4.483 0 0 0 19.5 9h-15a4.483 4.483 0 0 0-3 1.146Z" />
-                        </svg>
+                        <img src="/logo.png" alt="Logo" className="w-10 h-10 object-contain" />
                         <span className="font-bold text-xl tracking-wide text-white">SemesterScan</span>
                     </div>
                 </div>
@@ -758,9 +870,9 @@ export default function App() {
                         <div className="min-h-full flex flex-col items-center justify-start text-center max-w-4xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-700 py-20">
                             <div className="mb-10 relative">
                                 <img
-                                    src="https://lh3.googleusercontent.com/aida-public/AB6AXuCHHoDOm3K7f_ZdoVpwwB2yNS4sgyOJP5dhwK5S-Jl9a3nUMeqQvkSRr8uOy_IgIG4dazyaVepv15ZZr36MR-wgZ9kTJ1iV5do5U3s6o3Ywd_njb0Sa2pW3Fvko1KmVMK0Iy1tKF_TwSdErepvt7iSzumlekjHDzuNehMzMeTJSJlN2xo680qAwc6kwd2yMHj4Re9Zrwsgp1k70uy9btl19loIfzQw11Jvc0IDQlMn20BlJK8Ra69C61uRSRLpN1fp4MJAD7nGverA"
+                                    src="/logo.png"
                                     alt="Academic Illustration"
-                                    className="w-72 mix-blend-multiply relative z-10"
+                                    className="w-48 relative z-10 mx-auto"
                                 />
                                 <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-64 h-64 border border-[#c8bca0]/40 rounded-full -z-10" />
                             </div>
@@ -814,6 +926,18 @@ export default function App() {
                                             />
                                         )}
 
+                                        {/* Beta Features Toggle */}
+                                        <div className="flex items-center gap-3 bg-indigo-50 px-4 py-2 rounded-lg border border-indigo-100">
+                                            <div className={`w-8 h-4 rounded-full p-0.5 transition-colors cursor-pointer ${isBetaEnabled ? 'bg-indigo-600' : 'bg-gray-300'}`}
+                                                onClick={() => setIsBetaEnabled(!isBetaEnabled)}>
+                                                <div className={`w-3 h-3 bg-white rounded-full shadow-sm transition-transform ${isBetaEnabled ? 'translate-x-4' : 'translate-x-0'}`} />
+                                            </div>
+                                            <div className="text-xs">
+                                                <div className="font-bold text-indigo-900">Beta Features</div>
+                                                <div className="text-[10px] text-indigo-600/70">Enable Chat Timeline & Quizzes</div>
+                                            </div>
+                                        </div>
+
                                         {/* Quota Display */}
                                         {scanMode === 'pro' && (
                                             <div className="w-full px-4 py-2 bg-gradient-to-r from-purple-50 to-pink-50 rounded-lg border border-purple-200 text-xs text-center font-medium text-purple-700">
@@ -835,7 +959,7 @@ export default function App() {
                                     { title: "Medical", desc: "Sort Anatomy diagrams from whiteboard photos.", color: "bg-rose-50 text-rose-700" },
                                     { title: "CS & IT", desc: "Keep track of coding assignments & lab manuals.", color: "bg-emerald-50 text-emerald-700" }
                                 ].map((major, i) => (
-                                    <div key={i} className={`p-6 rounded-2xl border border-black/5 ${major.color} bg-opacity-50`}>
+                                    <div key={i} className={`p - 6 rounded - 2xl border border - black / 5 ${major.color} bg - opacity - 50`}>
                                         <h3 className="font-bold mb-2">{major.title}</h3>
                                         <p className="text-xs opacity-80">{major.desc}</p>
                                     </div>
@@ -863,8 +987,8 @@ export default function App() {
                             <div className="w-16 h-16 rounded-full border-2 border-gray-200 border-t-[#1a3b5d] animate-spin" />
                             <div className="w-full space-y-4">
                                 {scanNarrative.map((text, i) => (
-                                    <div key={i} className={`flex items-center justify-between px-6 py-4 rounded-xl border transition-all duration-500 ${scanStep > i + 1 ? 'bg-emerald-50 border-emerald-100' : scanStep === i + 1 ? 'bg-white border-[#1a3b5d]/30' : 'bg-white/50 opacity-20'
-                                        }`}>
+                                    <div key={i} className={`flex items - center justify - between px - 6 py - 4 rounded - xl border transition - all duration - 500 ${scanStep > i + 1 ? 'bg-emerald-50 border-emerald-100' : scanStep === i + 1 ? 'bg-white border-[#1a3b5d]/30' : 'bg-white/50 opacity-20'
+                                        } `}>
                                         <span className="text-sm font-medium text-[#122538]">{text}</span>
                                         {scanStep > i + 1 ? <CheckCircle2 className="w-4 h-4 text-[#0f5132]" /> : scanStep === i + 1 && <Loader2 className="w-4 h-4 animate-spin text-[#1a3b5d]" />}
                                     </div>
@@ -891,7 +1015,10 @@ export default function App() {
                                         onClick={async () => {
                                             // Check if user is signed in
                                             if (!user || !driveToken) {
-                                                alert('📁 Please sign in with Google to save to Drive!\n\nClick your profile icon in the sidebar to sign in.');
+                                                const confirmLogin = confirm("You need to sign in with Google to save files. Sign in now?");
+                                                if (confirmLogin) {
+                                                    handleDriveAuth();
+                                                }
                                                 return;
                                             }
 
@@ -902,14 +1029,14 @@ export default function App() {
                                                     const filename = `SemesterScan_${new Date().toISOString().split('T')[0]}.zip`;
                                                     const result = await uploadToDrive(blob, filename, driveToken);
                                                     if (result.success) {
-                                                        alert(`✅ Saved to Google Drive!\n\nView: ${result.webViewLink}`);
+                                                        alert(`✅ Saved to Google Drive!\n\nView: ${result.webViewLink} `);
                                                     } else {
                                                         throw new Error(result.error);
                                                     }
                                                 }
                                             } catch (e) {
                                                 console.error("Drive Upload Failed:", e);
-                                                alert(`❌ Upload failed: ${e.message}\n\nTIP: Did you add '${window.location.origin}' to "Authorized JavaScript origins" in Google Cloud Console?`);
+                                                alert(`❌ Upload failed: ${e.message} \n\nTIP: Did you add '${window.location.origin}' to "Authorized JavaScript origins" in Google Cloud Console ? `);
                                             } finally {
                                                 setIsUploading(false);
                                             }
@@ -922,7 +1049,6 @@ export default function App() {
                                     </button>
                                     <button
                                         onClick={() => {
-                                            setChatContent('');
                                             setZipInstance(null);
                                             setResults([]);
                                             setSelectedFile(null);
@@ -961,6 +1087,28 @@ export default function App() {
                                 <MetricCard label="Chat Noise Filtered" value={stats.junk} icon={Trash2} />
                                 <MetricCard label="Department Clusters" value={stats.subjects} icon={Folder} />
                             </div>
+
+                            {/* TIMELINE BETA VIEW */}
+                            {/* TIMELINE BETA VIEW */}
+                            {isBetaEnabled && (
+                                timelineEvents.length > 0 ? (
+                                    <div className="bg-white border border-[#d1c7b3]/30 rounded-2xl p-6 shadow-sm">
+                                        <div className="flex items-center gap-3 mb-6 border-b border-gray-100 pb-4">
+                                            <CalendarIcon className="w-5 h-5 text-indigo-600" />
+                                            <h3 className="font-bold text-lg text-[#122538]">Key Curricular Dates (Beta)</h3>
+                                            <span className="px-2 py-0.5 bg-indigo-100 text-indigo-600 text-[10px] font-bold rounded-full">AI Generated</span>
+                                        </div>
+                                        <TimelineView events={timelineEvents} />
+                                    </div>
+                                ) : (
+                                    <div className="p-4 border border-dashed border-gray-300 rounded-xl text-center bg-gray-50/50">
+                                        <p className="text-xs text-gray-400 font-medium flex items-center justify-center gap-2">
+                                            <CalendarIcon className="w-3 h-3" />
+                                            Timeline requires a chat log (.txt) scanned in <span className="font-bold text-purple-600">PRO Mode</span>.
+                                        </p>
+                                    </div>
+                                )
+                            )}
                         </div>
                     )}
 
@@ -1030,8 +1178,8 @@ export default function App() {
                                             <td className="px-8 py-5 italic text-gray-400 text-xs font-serif">{r.subject}</td>
                                             <td className="px-8 py-5">
                                                 <div className="flex items-center gap-2">
-                                                    <div className={`w-1.5 h-1.5 rounded-full ${r.category === 'Junk' ? 'bg-gray-300' : 'bg-[#c8bca0]'}`} />
-                                                    <span className={`text-[10px] font-bold uppercase ${r.category === 'Junk' ? 'text-gray-400' : 'text-[#1a3b5d]'}`}>{r.confidence} Match</span>
+                                                    <div className={`w - 1.5 h - 1.5 rounded - full ${r.category === 'Junk' ? 'bg-gray-300' : 'bg-[#c8bca0]'} `} />
+                                                    <span className={`text - [10px] font - bold uppercase ${r.category === 'Junk' ? 'text-gray-400' : 'text-[#1a3b5d]'} `}>{r.confidence} Match</span>
                                                 </div>
                                             </td>
                                         </tr>
@@ -1135,12 +1283,12 @@ export default function App() {
                                             <div>
                                                 <h3 className="font-bold text-[#122538] text-lg">Scan from {new Date(session.date).toLocaleDateString()}</h3>
                                                 <p className="text-sm text-gray-500 mt-1">
-                                                    {session.fileCount} files • {session.subjects?.slice(0, 3).join(', ') || 'Various'} {session.subjects?.length > 3 && `+${session.subjects.length - 3}`}
+                                                    {session.fileCount} files • {session.subjects?.slice(0, 3).join(', ') || 'Various'} {session.subjects?.length > 3 && `+ ${session.subjects.length - 3} `}
                                                 </p>
                                             </div>
                                             <div className="text-right">
-                                                <div className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${session.type === 'pro' ? 'bg-purple-100 text-purple-800' : 'bg-gray-100 text-gray-800'
-                                                    }`}>
+                                                <div className={`inline - flex items - center px - 2.5 py - 0.5 rounded - full text - xs font - medium ${session.type === 'pro' ? 'bg-purple-100 text-purple-800' : 'bg-gray-100 text-gray-800'
+                                                    } `}>
                                                     {session.type === 'pro' ? 'PRO MODE' : 'FAST MODE'}
                                                 </div>
                                                 <p className="text-xs text-gray-400 mt-2">{new Date(session.date).toLocaleTimeString()}</p>
@@ -1247,6 +1395,43 @@ export default function App() {
                                     <div className="flex flex-wrap gap-2 justify-center">
                                         <span className="px-3 py-1 bg-[#1a3b5d]/5 text-[#1a3b5d] text-[10px] font-bold uppercase tracking-wider rounded-md border border-[#1a3b5d]/10">{selectedFile.subject}</span>
                                     </div>
+
+                                    {/* Beta: Quiz Generator Button */}
+                                    {isBetaEnabled && (selectedFile.category === 'Notes' || selectedFile.category === 'Assignment') && (
+                                        <button
+                                            onClick={async () => {
+                                                setQuizModal({ open: true, data: null, loading: true });
+                                                // We need content. If OCR exists use it. If not, try to fetch/extract (if text).
+                                                let content = selectedFile.ocrText;
+                                                if (!content && selectedFile.fileName.endsWith('.txt')) {
+                                                    // If it's a txt file we didn't extract yet? 
+                                                    // Actually we don't store text content for privacy unless context enabled.
+                                                    // We'll have to re-extract on demand here.
+                                                    try {
+                                                        const blob = await getFileFromWorker(selectedFile.fileName);
+                                                        if (blob) content = await extractFileContent(new File([blob], selectedFile.fileName));
+                                                    } catch (e) { console.error(e); }
+                                                }
+
+                                                if (!content || content.length < 50) {
+                                                    alert("Not enough text content found to generate a quiz directly. Enable 'File Context' or use on OCR'd images.");
+                                                    setQuizModal({ open: false, data: null, loading: false });
+                                                    return;
+                                                }
+
+                                                const quiz = await callGeminiQuiz(content, selectedFile.fileName);
+                                                if (quiz) {
+                                                    setQuizModal({ open: true, data: quiz, loading: false });
+                                                } else {
+                                                    alert("Failed to generate quiz.");
+                                                    setQuizModal({ open: false, data: null, loading: false });
+                                                }
+                                            }}
+                                            className="w-full mt-4 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-xl font-bold shadow-lg hover:shadow-indigo-500/30 transition-all flex items-center justify-center gap-2"
+                                        >
+                                            <Sparkles className="w-4 h-4" /> Generate Practice Quiz
+                                        </button>
+                                    )}
                                 </div>
 
                                 {selectedFile.ocrText && (
@@ -1271,57 +1456,81 @@ export default function App() {
             </main >
 
             {/* STUDY BRIEF MODAL */}
-            {studyBriefModal.open && (
-                <div className="fixed inset-0 bg-[#122538]/80 backdrop-blur-md flex items-center justify-center z-50 p-6">
-                    <div className="bg-[#f8f5f0] w-full max-w-2xl max-h-[80vh] rounded-[32px] shadow-2xl overflow-hidden border border-white/50 animate-in fade-in flex flex-col">
-                        <div className="p-8 border-b border-[#d1c7b3]/30 flex items-center justify-between shrink-0">
-                            <div>
-                                <h3 className="font-serif text-2xl font-bold text-[#122538]">Study Brief Preview</h3>
-                                <p className="text-sm text-gray-500">AI-generated summary of your files</p>
-                            </div>
-                            <button onClick={() => setStudyBriefModal({ open: false, content: '', loading: false })}>
-                                <X className="w-6 h-6 text-gray-400 hover:text-gray-600" />
-                            </button>
-                        </div>
-                        <div className="flex-1 overflow-y-auto p-8">
-                            {studyBriefModal.loading ? (
-                                <div className="flex flex-col items-center justify-center py-16 text-gray-400">
-                                    <Loader2 className="w-12 h-12 animate-spin mb-4" />
-                                    <p className="text-lg font-medium">Generating Study Brief...</p>
-                                    <p className="text-sm">This may take a few seconds</p>
+            {
+                studyBriefModal.open && (
+                    <div className="fixed inset-0 bg-[#122538]/80 backdrop-blur-md flex items-center justify-center z-50 p-6">
+                        <div className="bg-[#f8f5f0] w-full max-w-2xl max-h-[80vh] rounded-[32px] shadow-2xl overflow-hidden border border-white/50 animate-in fade-in flex flex-col">
+                            <div className="p-8 border-b border-[#d1c7b3]/30 flex items-center justify-between shrink-0">
+                                <div>
+                                    <h3 className="font-serif text-2xl font-bold text-[#122538]">Study Brief Preview</h3>
+                                    <p className="text-sm text-gray-500">AI-generated summary of your files</p>
                                 </div>
-                            ) : (
-                                <div className="bg-white border border-[#d1c7b3]/30 rounded-2xl p-6 prose prose-sm prose-slate max-w-none prose-headings:font-serif prose-headings:text-[#122538] prose-h1:text-2xl prose-h2:text-xl prose-h3:text-lg prose-p:text-gray-700 prose-li:text-gray-700 prose-strong:text-[#1a3b5d] prose-table:text-sm prose-th:bg-[#f8f5f0] prose-th:p-2 prose-th:border prose-th:border-[#d1c7b3]/30 prose-td:p-2 prose-td:border prose-td:border-[#d1c7b3]/30">
-                                    <ReactMarkdown>
-                                        {studyBriefModal.content || 'No content generated.'}
-                                    </ReactMarkdown>
+                                <button onClick={() => setStudyBriefModal({ open: false, content: '', loading: false })}>
+                                    <X className="w-6 h-6 text-gray-400 hover:text-gray-600" />
+                                </button>
+                            </div>
+                            <div className="flex-1 overflow-y-auto p-8">
+                                {studyBriefModal.loading ? (
+                                    <div className="flex flex-col items-center justify-center py-16 text-gray-400">
+                                        <Loader2 className="w-12 h-12 animate-spin mb-4" />
+                                        <p className="text-lg font-medium">Generating Study Brief...</p>
+                                        <p className="text-sm">This may take a few seconds</p>
+                                    </div>
+                                ) : (
+                                    <div className="bg-white border border-[#d1c7b3]/30 rounded-2xl p-6 prose prose-sm prose-slate max-w-none prose-headings:font-serif prose-headings:text-[#122538] prose-h1:text-2xl prose-h2:text-xl prose-h3:text-lg prose-p:text-gray-700 prose-li:text-gray-700 prose-strong:text-[#1a3b5d] prose-table:text-sm prose-th:bg-[#f8f5f0] prose-th:p-2 prose-th:border prose-th:border-[#d1c7b3]/30 prose-td:p-2 prose-td:border prose-td:border-[#d1c7b3]/30">
+                                        <ReactMarkdown>
+                                            {studyBriefModal.content || 'No content generated.'}
+                                        </ReactMarkdown>
+                                    </div>
+                                )}
+                            </div>
+                            {!studyBriefModal.loading && studyBriefModal.content && (
+                                <div className="p-6 bg-white/80 border-t border-[#d1c7b3]/30 flex justify-end gap-4 shrink-0">
+                                    <button
+                                        onClick={() => navigator.clipboard.writeText(studyBriefModal.content)}
+                                        className="px-6 py-3 bg-gray-100 text-[#122538] rounded-xl text-sm font-bold hover:bg-gray-200 transition-colors"
+                                    >
+                                        Copy to Clipboard
+                                    </button>
+                                    <button
+                                        onClick={() => {
+                                            const blob = new Blob([studyBriefModal.content], { type: 'text/markdown' });
+                                            const url = URL.createObjectURL(blob);
+                                            const a = document.createElement('a'); a.href = url; a.download = 'Study_Brief.md'; a.click();
+                                        }}
+                                        className="px-6 py-3 bg-[#1a3b5d] text-white rounded-xl text-sm font-bold hover:bg-[#0d1b2a] transition-colors flex items-center gap-2"
+                                    >
+                                        <Download className="w-4 h-4" /> Download
+                                    </button>
                                 </div>
                             )}
                         </div>
-                        {!studyBriefModal.loading && studyBriefModal.content && (
-                            <div className="p-6 bg-white/80 border-t border-[#d1c7b3]/30 flex justify-end gap-4 shrink-0">
-                                <button
-                                    onClick={() => navigator.clipboard.writeText(studyBriefModal.content)}
-                                    className="px-6 py-3 bg-gray-100 text-[#122538] rounded-xl text-sm font-bold hover:bg-gray-200 transition-colors"
-                                >
-                                    Copy to Clipboard
-                                </button>
-                                <button
-                                    onClick={() => {
-                                        const blob = new Blob([studyBriefModal.content], { type: 'text/markdown' });
-                                        const url = URL.createObjectURL(blob);
-                                        const a = document.createElement('a'); a.href = url; a.download = 'Study_Brief.md'; a.click();
-                                    }}
-                                    className="px-6 py-3 bg-[#1a3b5d] text-white rounded-xl text-sm font-bold hover:bg-[#0d1b2a] transition-colors flex items-center gap-2"
-                                >
-                                    <Download className="w-4 h-4" /> Download
-                                </button>
-                            </div>
-                        )}
                     </div>
-                </div>
-            )}
+                )
+            }
 
+
+            {/* FLOATING HELP */}
+            {/* QUIZ MODAL */}
+            {
+                quizModal.open && (
+                    quizModal.loading ? (
+                        <div className="fixed inset-0 bg-[#122538]/80 backdrop-blur-sm flex items-center justify-center z-[60]">
+                            <div className="bg-white p-8 rounded-2xl flex flex-col items-center animate-in zoom-in-95">
+                                <Loader2 className="w-10 h-10 text-indigo-600 animate-spin mb-4" />
+                                <h3 className="font-bold text-lg text-[#122538]">Generating Quiz...</h3>
+                                <p className="text-sm text-gray-500">Analyzing concepts & creating questions</p>
+                            </div>
+                        </div>
+                    ) : (
+                        <QuizModal
+                            isOpen={quizModal.open}
+                            quizData={quizModal.data}
+                            onClose={() => setQuizModal({ open: false, data: null, loading: false })}
+                        />
+                    )
+                )
+            }
 
             {/* FLOATING HELP */}
             <button onClick={() => setView('guide')} className="fixed bottom-10 right-10 w-14 h-14 bg-[#1a3b5d] hover:bg-[#0d1b2a] rounded-full shadow-2xl flex items-center justify-center text-white transition-all hover:scale-110 z-30 shadow-indigo-600/20"><Info className="w-6 h-6" /></button>
@@ -1339,7 +1548,7 @@ export default function App() {
         .fade-in { animation-name: fade-in; }
         .slide-in-from-bottom-4 { animation-name: slide-in-from-bottom; }
         .slide-in-from-right { animation-name: slide-in-from-right; }
-      `}} />
+`}} />
         </div >
     );
 }
